@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WalletConnect</title>
+  </head>
+  <!-- react-native-walletconnect (${key})-->
+  <body style="margin: 0; padding: 0">
+    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/browser@1.0.0/dist/umd/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/qrcode-modal@1.2.2/dist/umd/index.min.js"></script>
+    <script>
+      var shouldPostMessage = (data) => {
+        if (window.ReactNativeWebView) {
+          return window.ReactNativeWebView.postMessage(JSON.stringify(data));
+        }
+        return top.postMessage(
+          JSON.stringify(data),
+          window.location != window.parent.location
+            ? document.referrer
+            : document.location
+        );
+      };
+      var WalletConnect = window.WalletConnect.default;
+      var WalletConnectQRCodeModal = window.WalletConnectQRCodeModal.default;
+      var walletConnector = new WalletConnect({
+        bridge: "https://bridge.walletconnect.org",
+        qrcodeModal: WalletConnectQRCodeModal,
+      });
+      /* routing */
+      window["${id}"] = (id, fn, params) =>
+        Promise.resolve()
+          .then(() => walletConnector[fn].apply(walletConnector, params))
+          .then((payload) =>
+            shouldPostMessage({ type: "WCRoundTripEvent", id, payload })
+          )
+          .catch((error) =>
+            shouldPostMessage({ type: "WCRoundTripEvent", id, error })
+          );
+
+      walletConnector.on("connect", (error, payload) => {
+        if (error) {
+          return shouldPostMessage({ type: "WCErrorEvent", error });
+        }
+        return shouldPostMessage({ type: "WCConnectEvent", payload });
+      });
+      walletConnector.on("session_update", (error, payload) => {
+        if (error) {
+          return shouldPostMessage({ type: "WCErrorEvent", error });
+        }
+        return shouldPostMessage({ type: "WCSessionUpdateEvent", payload });
+      });
+      walletConnector.on("disconnect", (error, payload) => {
+        if (error) {
+          return shouldPostMessage({ type: "WCErrorEvent", error });
+        }
+        shouldPostMessage({ type: "WCDisconnectEvent", payload });
+        return nextSession();
+      });
+
+      function nextSession() {
+        Promise.resolve()
+          .then(
+            () => walletConnector.connected && walletConnector.killSession()
+          )
+          .then(() => walletConnector.createSession())
+          .then(() =>
+            WalletConnectQRCodeModal.open(walletConnector.uri, () => {
+              shouldPostMessage({ type: "WCQRModalClosedEvent" });
+              setTimeout(nextSession, 500);
+            })
+          )
+          .catch((error) => {
+            shouldPostMessage({ type: "WCQRModalClosedEvent" });
+            shouldPostMessage({ type: "WCErrorEvent", error });
+          });
+      }
+
+      // Main: If already connected, just refresh the session.
+      //       Warning; although we still have the ability to acknowledge
+      //       the session, we do end up missing wallet provider details.
+      if (walletConnector.connected) {
+        try {
+          walletConnector.updateSession(walletConnector);
+        } catch (e) {
+          nextSession();
+        }
+      } else {
+        nextSession();
+      }
+    </script>
+  </body>
+</html>
